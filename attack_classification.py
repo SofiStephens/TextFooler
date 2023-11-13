@@ -49,15 +49,25 @@ class USE(object):
         return scores
 
 def pick_most_similar_words_batch(src_words, sim_mat, idx2word, ret_count=10, threshold=0.):
+    '''
+    In summary, this function provides a way to retrieve the most similar words for a batch of source words based on a given similarity matrix. 
+    The similarity scores are thresholded, and only words with similarity scores above the threshold are considered. 
+    The function returns lists of similar words and their corresponding similarity values for each source word.
+    '''
     """
     embeddings is a matrix with (d, vocab_size)
     """
+    #Computes the indices of the top similar words for each source word based on the similarity matrix. The - sign in -sim_mat[src_words, :] indicates sorting in descending order.
     sim_order = np.argsort(-sim_mat[src_words, :])[:, 1:1 + ret_count]
     sim_words, sim_values = [], []
     for idx, src_word in enumerate(src_words):
+        # Extracts the similarity values for the top similar words for the current source word.
         sim_value = sim_mat[src_word][sim_order[idx]]
+        # Creates a boolean mask based on the threshold, filtering out words with similarity scores below the threshold.
         mask = sim_value >= threshold
+        # Extracts the indices of similar words that satisfy the threshold condition. Extracts the corresponding similarity values.
         sim_word, sim_value = sim_order[idx][mask], sim_value[mask]
+        # Converts the word indices to actual word strings using the idx2word mapping.
         sim_word = [idx2word[id] for id in sim_word]
         sim_words.append(sim_word)
         sim_values.append(sim_value)
@@ -65,6 +75,11 @@ def pick_most_similar_words_batch(src_words, sim_mat, idx2word, ret_count=10, th
 
 
 class NLI_infer_BERT(nn.Module):
+    ''' 
+    Designed for making predictions on textual data using a pre-trained BERT model for NLI. 
+    The text_pred method takes care of transforming input text data into appropriate inputs for the BERT model, 
+    running inference, and returning the probability scores for each class. 
+    '''
     def __init__(self,
                  pretrained_dir,
                  nclasses,
@@ -91,14 +106,17 @@ class NLI_infer_BERT(nn.Module):
             segment_ids = segment_ids.cuda()
 
             with torch.no_grad():
-                logits = self.model(input_ids, segment_ids, input_mask)
-                probs = nn.functional.softmax(logits, dim=-1)
+                logits = self.model(input_ids, segment_ids, input_mask) #Computes the logits (raw output) using the BERT model.
+                probs = nn.functional.softmax(logits, dim=-1) #Applies softmax activation to obtain probability scores.
                 probs_all.append(probs)
 
         return torch.cat(probs_all, dim=0)
 
 
 class InputFeatures(object):
+    '''container or data structure used to hold a single set of features for input data (which is often tokenized and represented in the form of features
+      before being fed into the model). encapsulate the input features of a single data instance, making it easier to pass around and manage data during the preprocessing 
+      and feeding stages in a machine learning pipeline. Instances of this class can be created for each input sample and then used as input to models like BERT.'''
     """A single set of features of data."""
 
     def __init__(self, input_ids, input_mask, segment_ids):
@@ -196,12 +214,26 @@ class NLIDataset_BERT(Dataset):
 def attack(text_ls, true_label, predictor, stop_words_set, word2idx, idx2word, cos_sim, sim_predictor=None,
            import_score_threshold=-1., sim_score_threshold=0.5, sim_score_window=15, synonym_num=50,
            batch_size=32):
+    '''text_ls: List of tokens representing the input text.
+    true_label: True label of the input text.
+    predictor: A function that takes a list of texts and returns the model's predictions.
+    stop_words_set: A set of stop words to be excluded from the perturbation.
+    word2idx: Mapping from words to their corresponding indices.
+    idx2word: Mapping from indices to words.
+    cos_sim: Cosine similarity matrix between words.
+    sim_predictor: A semantic similarity predictor function.
+    import_score_threshold: Threshold for importance scores.
+    sim_score_threshold: Threshold for semantic similarity scores.
+    sim_score_window: Window size for computing semantic similarity.
+    synonym_num: Number of synonyms to consider.
+    batch_size: Batch size for processing.'''
+    
     # first check the prediction of the original text
     orig_probs = predictor([text_ls]).squeeze()
     orig_label = torch.argmax(orig_probs)
     orig_prob = orig_probs.max()
     if true_label != orig_label:
-        return '', 0, orig_label, orig_label, 0
+        return '', 0, orig_label, orig_label, 0 #If the original label is different from the true label, return no changes.
     else:
         len_text = len(text_ls)
         if len_text < sim_score_window:
@@ -245,10 +277,14 @@ def attack(text_ls, true_label, predictor, stop_words_set, word2idx, idx2word, c
         text_cache = text_prime[:]
         num_changed = 0
         for idx, synonyms in synonyms_all:
-            new_texts = [text_prime[:idx] + [synonym] + text_prime[min(idx + 1, len_text):] for synonym in synonyms]
+            #Generate new texts by replacing the important word with each synonym.
+            new_texts = [text_prime[:idx] + [synonym] + text_prime[min(idx + 1, len_text):] for synonym in synonyms] 
+            #Obtain the model's predictions for the new texts
             new_probs = predictor(new_texts, batch_size=batch_size)
 
             # compute semantic similarity
+            #  determining the range of the input text that should be considered when computing semantic similarity scores. 
+            # The goal is to define a context window around the word being replaced (idx) to capture the surrounding words for comparison
             if idx >= half_sim_score_window and len_text - idx - 1 >= half_sim_score_window:
                 text_range_min = idx - half_sim_score_window
                 text_range_max = idx + half_sim_score_window + 1
@@ -261,34 +297,50 @@ def attack(text_ls, true_label, predictor, stop_words_set, word2idx, idx2word, c
             else:
                 text_range_min = 0
                 text_range_max = len_text
+            #The goal is to measure how similar the context around the word being replaced is to the context around each of its synonyms. 
             semantic_sims = \
             sim_predictor.semantic_sim([' '.join(text_cache[text_range_min:text_range_max])] * len(new_texts),
                                        list(map(lambda x: ' '.join(x[text_range_min:text_range_max]), new_texts)))[0]
 
+            #Increase the num_queries variable by the number of new texts created in the previous step. This counter tracks the total number of queries made to the model.
             num_queries += len(new_texts)
+            #If the shape of new_probs has only one dimension, add an extra dimension to it. This is done to ensure that the shape is compatible with subsequent operations.
             if len(new_probs.shape) < 2:
                 new_probs = new_probs.unsqueeze(0)
+            #Create a binary mask indicating which new texts result in a different label prediction than the original. 
+            # This mask is based on comparing the original label (orig_label) with the predicted label from new_probs.
             new_probs_mask = (orig_label != torch.argmax(new_probs, dim=-1)).data.cpu().numpy()
-            # prevent bad synonyms
+            # prevent bad synonyms.Further filter the new_probs_mask based on a semantic similarity threshold
             new_probs_mask *= (semantic_sims >= sim_score_threshold)
             # prevent incompatible pos
+            #For each new text, extract the POS information for a window around the word being replaced
             synonyms_pos_ls = [criteria.get_pos(new_text[max(idx - 4, 0):idx + 5])[min(4, idx)]
                                if len(new_text) > 10 else criteria.get_pos(new_text)[idx] for new_text in new_texts]
+            #Create a binary mask (pos_mask) based on whether the POS of the word being replaced is compatible with the POS of its synonyms.
             pos_mask = np.array(criteria.pos_filter(pos_ls[idx], synonyms_pos_ls))
+            #Combine the new_probs_mask with the pos_mask to ensure that only valid synonyms, considering both semantic similarity and POS constraints, are considered.
             new_probs_mask *= pos_mask
 
+            #Check if there are potential synonyms that meet the filtering criteria
             if np.sum(new_probs_mask) > 0:
+                # If suitable synonyms exist, replace the word at index idx in text_prime with the synonym that maximizes the product of the filtered new_probs_mask and semantic_sims. 
+                # This aims to select the most promising synonym that is likely to change the model's prediction.
                 text_prime[idx] = synonyms[(new_probs_mask * semantic_sims).argmax()]
-                num_changed += 1
-                break
+                num_changed += 1 #Increment the counter for the number of changed words.
+                break #Exit the loop because a suitable synonym has been found and applied.
             else:
+                # Compute a new label probability for each synonym based on the original label's probability and additional penalties for low semantic similarity and incompatible POS.
                 new_label_probs = new_probs[:, orig_label] + torch.from_numpy(
                         (semantic_sims < sim_score_threshold) + (1 - pos_mask).astype(float)).float().cuda()
+                #Find the minimum value and its corresponding index in the computed label probabilities.
                 new_label_prob_min, new_label_prob_argmin = torch.min(new_label_probs, dim=-1)
+                #If the minimum probability is less than the original probability
                 if new_label_prob_min < orig_prob:
+                    # Replace the word at index idx with the synonym corresponding to the minimum label probability
                     text_prime[idx] = synonyms[new_label_prob_argmin]
                     num_changed += 1
-            text_cache = text_prime[:]
+            text_cache = text_prime[:] #Update the text_cache with the modified text_prime. This cached version is used in the next iteration of the loop.
+        #Return the modified text (' '.join(text_prime)), the number of changed words, the original label, the new label predicted by the model, and the total number of queries made to the predictor.
         return ' '.join(text_prime), num_changed, orig_label, torch.argmax(predictor([text_prime])), num_queries
 
 

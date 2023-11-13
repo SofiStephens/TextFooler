@@ -1,3 +1,4 @@
+'''Get Part-Of-Speach. Filter the same POS. Change tense if verb'''
 from __future__ import division
 import nltk
 from nltk.stem.wordnet import WordNetLemmatizer
@@ -49,15 +50,16 @@ def get_pos(sent, tagset='universal'):
         - X (a catch-all for other categories such as abbreviations or foreign words)
     '''
     if tagset == 'default':
-        word_n_pos_list = nltk.pos_tag(sent)
+        word_n_pos_list = nltk.pos_tag(sent) # pos_tag: The result is a list of tuples, where each tuple contains a word and its corresponding POS tag.
     elif tagset == 'universal':
         word_n_pos_list = nltk.pos_tag(sent, tagset=tagset)
-    _, pos_list = zip(*word_n_pos_list)
+    _, pos_list = zip(*word_n_pos_list) #transposes the list, turning tuples of the form (word, pos) into two separate lists: one containing all the words and another containing all the POS tags.
+    # Disregards the actual words (_)
     return pos_list
 
 
 # Function 2: Pos Filter
-def pos_filter(ori_pos, new_pos_list):
+def pos_filter(ori_pos, new_pos_list): #or set: checks if the original and new POS form a set that is entirely contained in the set ['NOUN', 'VERB']. It checks if both tags are either 'NOUN' or 'VERB'.
     same = [True if ori_pos == new_pos or (set([ori_pos, new_pos]) <= set(['NOUN', 'VERB']))
             else False
             for new_pos in new_pos_list]
@@ -79,7 +81,7 @@ def get_v_tense(sent):
     '''
     word_n_pos_list = nltk.pos_tag(sent)
     _, pos_list = zip(*word_n_pos_list)
-    tenses = {w_ix: tense for w_ix, tense in enumerate(pos_list) if tense.startswith('V')}
+    tenses = {w_ix: tense for w_ix, tense in enumerate(pos_list) if tense.startswith('V')} # the value is the POS tag (tense) if it starts with the letter 'V', indicating a verb.
     return tenses
 
 
@@ -93,9 +95,11 @@ def change_tense(word, tense, lemmatize=False):
     :return:
     reference link: https://www.clips.uantwerpen.be/pages/pattern-en#conjugation
     '''
+    # Lemmatize the word if lemmatize is set to True
     if lemmatize:
         word = WordNetLemmatizer().lemmatize(word, 'v')
         # if pos(word) is not verb, return word
+    # Dictionary lookup for conjugating the verb based on the specified tense
     lookup = {
         'VB': conjugate(verb=word, tense=PRESENT, number=SG),
         'VBD': conjugate(verb=word, tense=PAST, aspect=PROGRESSIVE, number=SG),
@@ -112,6 +116,8 @@ def get_sent_list():
     content = []
     for dataset in ['ag', 'fake', 'mr', 'yelp']:
         file = file_format.format(dataset)
+    #Inside the file, it reads each line, strips leading and trailing whitespace, and splits the line into a list of words using line.strip().split(). 
+    #These word lists are then appended to the content list. The result is a list of lists, where each inner list represents a sentence in the dataset.
         with open(file) as f:
             content += [line.strip().split() for line in f if line.strip()]
     return content
@@ -125,20 +131,25 @@ def check_pos(sent_list, win_size=10):
     :return: diff_ix = Counter({0: 606, 1: 180, 2: 42, 3: 15, 4: 5, 5: 1})
     len(sent_list) = 60139
     '''
-
+    # Create a copy of the sentence list and shuffle it
     sent_list = sent_list[:]
     random.shuffle(sent_list)
+    # Limit the number of sentences to 100
     sent_list = sent_list[:100]
 
+    # Generate random center indices for each sentence
     center_ix = [random.randint(0 + win_size // 2, len(sent) - 1 - win_size // 2)
                  if len(sent) > win_size else len(sent) // 2
                  for sent in sent_list]
+    # Define word ranges around the center indices
     word_range = [[max(0, cen_ix - win_size // 2), min(len(sent), cen_ix + win_size // 2)]
                   for cen_ix, sent in zip(center_ix, sent_list)]
 
+    # Ensure consistency in list lengths
     assert len(center_ix) == len(word_range)
     assert len(center_ix) == len(sent_list)
 
+    # Get POS tags for the entire sentences and for the selected word ranges
     corr_pos = [get_pos(sent)[word_range[sent_ix][0]: word_range[sent_ix][1]] for sent_ix, sent in enumerate(sent_list)]
     part_pos = [get_pos(sent[word_range[sent_ix][0]: word_range[sent_ix][1]]) for sent_ix, sent in enumerate(sent_list)]
     # corr_pos = [sent_pos[pad_size: -pad_size] if len(sent_pos) > 2 * pad_size else sent_pos
@@ -147,6 +158,7 @@ def check_pos(sent_list, win_size=10):
     #             for sent_ix, sent_pos in enumerate(part_pos)]
 
     diff_ix = []
+    # Identify differences in POS tags and store sentence indices
     diff_s_ix = []
     for sent_ix, (sent_pos_corr, sent_pos_part) in enumerate(zip(corr_pos, part_pos)):
         cen_ix = center_ix[sent_ix] - word_range[sent_ix][0]
